@@ -6,9 +6,9 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 import os, time, random, string, threading, hashlib, hmac, json, csv, io, zipfile, traceback, logging, re, unicodedata
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, quote, unquote
 from pymongo import MongoClient, ReturnDocument, WriteConcern
-from pymongo.errors import PyMongoError, AutoReconnect, ConnectionFailure, ConfigurationError
+from pymongo.errors import PyMongoError, AutoReconnect, ConnectionFailure, ConfigurationError, OperationFailure
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -24,6 +24,21 @@ def sanitize_mongo_uri(uri):
     try:
         uri = _strip_invisible(uri)
         parts = urlsplit(uri)
+        # Percent-encode the username/password so special characters in the
+        # password (@ : / # ? % etc.) don't break authentication. Normalizing
+        # via unquote()->quote() is idempotent, so an already-encoded value is
+        # left unchanged rather than double-encoded. This is the most common
+        # cause of Atlas "bad auth" errors.
+        netloc = parts.netloc
+        if "@" in netloc:
+            userinfo, host = netloc.rsplit("@", 1)
+            if ":" in userinfo:
+                user, pwd = userinfo.split(":", 1)
+                userinfo = quote(unquote(user), safe="") + ":" + quote(unquote(pwd), safe="")
+            else:
+                userinfo = quote(unquote(userinfo), safe="")
+            netloc = userinfo + "@" + host
+        parts = parts._replace(netloc=netloc)
         allowed = {
             "retrywrites", "journal", "readpreference", "replicaset", "authsource",
             "tls", "ssl", "tlsallowinvalidcertificates", "connecttimeoutms",
@@ -73,6 +88,19 @@ def connect_mongodb():
             mongo_client.admin.command("ping")
             print("✅ MongoDB connected")
             return mongo_client
+        except OperationFailure as exc:
+            # Authentication/authorization errors are permanent — retrying wastes
+            # time and floods the logs. Fail fast with an actionable message.
+            print(
+                "❌ MongoDB authentication failed (bad auth). This is a credential "
+                "problem, not a bug. Check that MONGO_URI has the correct database "
+                "username and password, that any special characters in the password "
+                "are percent-encoded (@ -> %40, # -> %23, etc.), that the database "
+                "user exists in MongoDB Atlas, and that Network Access allows this "
+                f"host (0.0.0.0/0). Details: {exc}",
+                flush=True,
+            )
+            raise RuntimeError(f"MongoDB authentication failed: {exc}") from exc
         except Exception as exc:
             last_error = exc
             print(f"⚠️ MongoDB connection attempt {attempt}/10 failed: {exc}", flush=True)
