@@ -235,7 +235,6 @@ def get_config():
             "method_notify_enabled": True,
             "group_import_notify_enabled": True,
             "manual_methods_list": "",
-            "default_admin_permissions": ["methods", "users", "content"],
             "auto_import_free_source": None,
             "auto_import_vip_source": None
         }
@@ -318,125 +317,48 @@ def append_to_manual_methods_list(folder):
         log_event("manual_methods_list_append_error", details={"error": str(exc)}, level="error")
 
 # =========================
-# 👑 MULTIPLE ADMINS + PERMISSIONS SYSTEM
+# 👑 MULTIPLE ADMINS SYSTEM
 # =========================
-ADMIN_PERMISSION_LABELS = {
-    "methods": "📚 Methods & Products",
-    "users": "👥 Users, VIP & Points",
-    "content": "📢 Broadcast & Messaging",
-    "automation": "🤖 Auto Post & Auto Import",
-    "channels": "📣 Channels, Force Join & Groups",
-    "settings": "⚙️ Bot, VIP & Payment Settings",
-    "reports": "📊 Stats, Search, Logs & Backup",
-    "admins": "👑 Manage Admins",
-}
-
-ADMIN_BUTTON_PERMISSIONS = {
-    "📦 Upload FREE": "methods", "💎 Upload VIP": "methods", "🗑 Delete Folder": "methods",
-    "✏️ Edit Price": "methods", "✏️ Edit Name": "methods", "📝 Edit Content": "methods",
-    "🔀 Move Folder": "methods", "⏳ Expire Method": "methods", "✅ Restore Method": "methods",
-    "📌 Pin Methods": "methods", "📝 Edit Methods List": "methods", "⏳ Pending Methods": "methods",
-    "👑 Add VIP": "users", "👑 Remove VIP": "users", "💰 Give Points": "users",
-    "🎫 Generate Codes": "users", "📊 View Codes": "users", "📦 Points Packages": "users",
-    "📢 Broadcast": "content", "📨 Group Messenger": "content", "🔔 Notify": "content",
-    "📣 Auto Posts": "automation", "📥 Auto Import": "automation",
-    "📢 Force Join": "channels", "👥 Join Notifications": "channels", "🛡 Group Management": "channels",
-    "📣 Channel Approvals": "channels",
-    "📞 Set Contacts": "settings", "⚙️ VIP Settings": "settings", "💳 Payment Methods": "settings",
-    "🏦 Binance Settings": "settings", "📸 Screenshot": "settings", "🔘 Button Manager": "settings",
-    "🙈 Hide Button": "settings", "👁 Show Button": "settings", "⚙️ Settings": "settings",
-    "📊 Stats": "reports", "📊 Leaderboard": "reports", "🔎 Search": "reports",
-    "🧾 Logs": "reports", "💾 Backup/Export": "reports",
-    "👥 Admin Management": "admins",
-}
-
 def init_admins():
-    admins_col.update_one(
-        {"_id": ADMIN_ID},
-        {"$set": {"is_owner": True, "permissions": ["*"]}, "$setOnInsert": {
-            "username": None, "added_by": "system", "added_at": time.time()
-        }}, upsert=True
-    )
+    if not admins_col.find_one({"_id": ADMIN_ID}):
+        admins_col.insert_one({
+            "_id": ADMIN_ID,
+            "username": None,
+            "added_by": "system",
+            "added_at": time.time(),
+            "is_owner": True
+        })
 
 init_admins()
 
-def is_owner(uid):
-    try:
-        return int(uid) == ADMIN_ID
-    except Exception:
-        return False
-
 def is_admin(uid):
-    try:
-        uid = int(uid)
-    except Exception:
-        return False
-    return uid == ADMIN_ID or admins_col.find_one({"_id": uid}) is not None
-
-def get_admin_permissions(uid):
-    if is_owner(uid):
-        return {"*"}
-    row = admins_col.find_one({"_id": int(uid)}, {"permissions": 1}) or {}
-    return set(row.get("permissions") or [])
-
-def has_admin_permission(uid, permission):
-    if is_owner(uid):
+    uid = int(uid) if isinstance(uid, str) else uid
+    if uid == ADMIN_ID:
         return True
-    if not is_admin(uid):
-        return False
-    permissions = get_admin_permissions(uid)
-    return "*" in permissions or permission in permissions
+    return admins_col.find_one({"_id": uid}) is not None
 
-def permission_for_button(text):
-    return ADMIN_BUTTON_PERMISSIONS.get(text, "reports")
-
-def admin_can_text(uid, text):
-    if not is_admin(uid):
-        return False
-    if text in ("⚙️ ADMIN PANEL", "❌ Exit"):
-        return True
-    return has_admin_permission(uid, permission_for_button(text))
-
-def callback_access_allowed(c):
-    """Reject forged admin callbacks when an admin lacks the relevant permission."""
-    if not is_admin(c.from_user.id):
-        return True
-    data = str(getattr(c, "data", "") or "")
-    rules = {
-        "adminperm|": "admins", "adminmgr|": "admins", "set_vip": "settings",
-        "set_points": "settings", "view_contacts": "settings", "set_binance_": "settings",
-        "view_binance": "settings", "set_vip_": "settings", "set_ref_": "settings",
-        "view_vip": "settings", "force|": "channels", "joinnotify|": "channels",
-        "auto|": "automation", "import": "automation", "methodslist|": "methods",
-        "pin": "methods", "pending": "methods", "btnmgr|": "settings",
-    }
-    for prefix, permission in rules.items():
-        if data.startswith(prefix) and not has_admin_permission(c.from_user.id, permission):
-            try: bot.answer_callback_query(c.id, "Permission denied by owner", True)
-            except Exception: pass
-            return False
-    return True
-
-def add_admin(uid, username=None, added_by=None, permissions=None):
-    uid = int(uid)
+def add_admin(uid, username=None, added_by=None):
+    uid = int(uid) if isinstance(uid, str) else uid
     if admins_col.find_one({"_id": uid}):
         return False
-    default_permissions = get_config().get("default_admin_permissions", ["methods", "users", "content"])
     admins_col.insert_one({
-        "_id": uid, "username": username, "added_by": added_by,
-        "added_at": time.time(), "is_owner": False,
-        "permissions": list(permissions if permissions is not None else default_permissions)
+        "_id": uid,
+        "username": username,
+        "added_by": added_by,
+        "added_at": time.time(),
+        "is_owner": False
     })
     return True
 
 def remove_admin(uid):
-    uid = int(uid)
+    uid = int(uid) if isinstance(uid, str) else uid
     if uid == ADMIN_ID:
         return False
-    return admins_col.delete_one({"_id": uid}).deleted_count > 0
+    result = admins_col.delete_one({"_id": uid})
+    return result.deleted_count > 0
 
 def get_all_admins():
-    return list(admins_col.find({}).sort("is_owner", -1))
+    return list(admins_col.find({}))
 
 # =========================
 # 👤 USER SYSTEM
@@ -1113,7 +1035,7 @@ def points_cmd(m):
     kb.row(InlineKeyboardButton("🔄 Refresh Balance", callback_data="check_balance"))
     raw_bot.send_message(uid, text, reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "open_points_shop"))
+@bot.callback_query_handler(func=lambda c: c.data == "open_points_shop")
 def open_points_shop_callback(c):
     bot.answer_callback_query(c.id)
     send_points_shop(c.from_user.id)
@@ -1238,7 +1160,7 @@ def show_category(m):
 # =========================
 # 📂 OPEN FOLDER (WITH WORKING SUBFOLDERS)
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("open|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("open|"))
 def open_folder(c):
     uid = c.from_user.id
     user = User(uid)
@@ -1396,7 +1318,7 @@ def open_folder(c):
 # =========================
 # 🔙 BACK BUTTON
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("back|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("back|"))
 def back_handler(c):
     _, cat, current_parent = c.data.split("|")
     
@@ -1419,7 +1341,7 @@ def back_handler(c):
 # =========================
 # 📄 PAGINATION
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("page|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("page|"))
 def page_handler(c):
     _, cat, page, parent = c.data.split("|")
     parent = parent if parent != "None" else None
@@ -1437,7 +1359,7 @@ def page_handler(c):
 # =========================
 # 💰 BUY METHOD
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("buy|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("buy|"))
 def buy_method(c):
     uid = c.from_user.id
     user = User(uid)
@@ -1483,30 +1405,78 @@ def buy_method(c):
 # =========================
 # CALLBACK HANDLERS
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "get_vip"))
+@bot.callback_query_handler(func=lambda c: c.data == "get_vip")
 def get_vip_callback(c):
+    uid = c.from_user.id
+    user = User(uid)
     cfg = get_cached_config()
-    vip_contact = (cfg.get("vip_contact") or "").strip()
-    if not vip_contact:
-        return bot.answer_callback_query(c.id, "VIP contact is not configured", True)
-    try:
-        contact_url = normalize_url_or_username(vip_contact)
-    except Exception:
-        return bot.answer_callback_query(c.id, "Configured VIP username is invalid", True)
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("⭐ Contact to Buy VIP", url=contact_url))
-    try:
-        bot.edit_message_text("⭐ BUY VIP\n\nTap below to contact the official VIP seller.", c.from_user.id, c.message.message_id, reply_markup=kb)
-    except Exception:
-        raw_bot.send_message(c.from_user.id, "⭐ BUY VIP\n\nTap below to contact the official VIP seller.", reply_markup=kb)
+    
+    if user.is_vip():
+        bot.answer_callback_query(c.id, "✅ Already VIP!", True)
+        return
+    
+    vip_msg = cfg.get("vip_msg", "💎 Buy VIP!")
+    vip_price_usd = cfg.get("vip_price", 50)
+    vip_price_points = cfg.get("vip_points_price", 5000)
+    vip_contact = cfg.get("vip_contact")
+    
+    binance_address = cfg.get("binance_address", "")
+    binance_coin = cfg.get("binance_coin", "USDT")
+    binance_network = cfg.get("binance_network", "TRC20")
+    binance_memo = cfg.get("binance_memo", "")
+    
+    message = f"💎 **VIP**\n\n{vip_msg}\n\n💰 Price:\n• ${vip_price_usd} USD\n• {vip_price_points} points\n\n"
+    
+    if binance_address:
+        message += f"💳 **Binance:**\nCoin: {binance_coin}\nNetwork: {binance_network}\nAddress: `{binance_address}`\n"
+        if binance_memo:
+            message += f"Memo: `{binance_memo}`\n"
+        message += f"Amount: ${vip_price_usd}\n\n"
+    
+    message += f"✨ Benefits:\n• All VIP methods\n• Priority support\n• No points needed\n\n"
+    
+    if vip_contact:
+        message += f"📞 Contact: {vip_contact}\n"
+    
+    message += f"\n🆔 ID: `{uid}`\n💰 Points: {user.points()}"
+    
+    kb = InlineKeyboardMarkup()
+    if user.points() >= vip_price_points:
+        kb.add(InlineKeyboardButton(f"⭐ Buy with {vip_price_points} pts", callback_data="buy_vip_points"))
+    if vip_contact:
+        if vip_contact.startswith("http"):
+            kb.add(InlineKeyboardButton("📞 Contact", url=vip_contact))
+        elif vip_contact.startswith("@"):
+            kb.add(InlineKeyboardButton("📞 Contact", url=f"https://t.me/{vip_contact.replace('@', '')}"))
+    
+    bot.edit_message_text(message, uid, c.message.message_id, reply_markup=kb if kb.keyboard else None, parse_mode="Markdown")
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "buy_vip_points"))
+@bot.callback_query_handler(func=lambda c: c.data == "buy_vip_points")
 def buy_vip_points_callback(c):
-    bot.answer_callback_query(c.id, "VIP purchases are handled by the owner", True)
-    get_vip_callback(c)
+    uid = c.from_user.id
+    user = User(uid)
+    cfg = get_cached_config()
+    vip_price_points = cfg.get("vip_points_price", 5000)
+    
+    if user.is_vip():
+        bot.answer_callback_query(c.id, "✅ Already VIP!", True)
+        return
+    
+    if user.points() >= vip_price_points:
+        user.spend_points(vip_price_points)
+        user.make_vip(cfg.get("vip_duration_days", 30))
+        bot.answer_callback_query(c.id, f"✅ VIP Purchased! -{vip_price_points} pts", True)
+        bot.edit_message_text(
+            f"🎉 **CONGRATULATIONS!** 🎉\n\nYou are now VIP!\n\n💰 Points: {user.points()}",
+            uid,
+            c.message.message_id,
+            parse_mode="Markdown"
+        )
+    else:
+        bot.answer_callback_query(c.id, f"❌ Need {vip_price_points} pts! You have {user.points()}", True)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "get_points"))
+@bot.callback_query_handler(func=lambda c: c.data == "get_points")
 def get_points_callback(c):
     if force_block(c.from_user.id):
         bot.answer_callback_query(c.id, "Join required chats first", True)
@@ -1514,12 +1484,12 @@ def get_points_callback(c):
     send_points_shop(c.from_user.id)
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "cancel_buy"))
+@bot.callback_query_handler(func=lambda c: c.data == "cancel_buy")
 def cancel_buy(c):
     bot.edit_message_text("❌ Cancelled", c.from_user.id, c.message.message_id)
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "check_balance"))
+@bot.callback_query_handler(func=lambda c: c.data == "check_balance")
 def check_balance_callback(c):
     uid = c.from_user.id
     user = User(uid)
@@ -1532,7 +1502,7 @@ def check_balance_callback(c):
         parse_mode="Markdown"
     )
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "get_referral"))
+@bot.callback_query_handler(func=lambda c: c.data == "get_referral")
 def get_referral_callback(c):
     uid = c.from_user.id
     cfg = get_cached_config()
@@ -1545,7 +1515,7 @@ def get_referral_callback(c):
         parse_mode="Markdown"
     )
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "get_vip_info"))
+@bot.callback_query_handler(func=lambda c: c.data == "get_vip_info")
 def get_vip_info_callback(c):
     uid = c.from_user.id
     cfg = get_cached_config()
@@ -1567,7 +1537,7 @@ def get_vip_info_callback(c):
     
     bot.edit_message_text(message, uid, c.message.message_id, reply_markup=kb if kb.keyboard else None, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "recheck"))
+@bot.callback_query_handler(func=lambda c: c.data == "recheck")
 def recheck(c):
     uid = c.from_user.id
     user = User(uid)
@@ -1669,7 +1639,7 @@ def methods_list_cmd(m):
         raw_bot.send_message(m.from_user.id, text[:cut])
         text = text[cut:].lstrip("\n")
 
-@bot.message_handler(func=lambda m: m.text == "📝 Edit Methods List" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📝 Edit Methods List" and is_admin(m.from_user.id))
 def edit_methods_list_menu(m):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("✍️ Send New Manual List", callback_data="methodslist|edit"))
@@ -1679,7 +1649,7 @@ def edit_methods_list_menu(m):
     status = "Manual list is active." if current else "Automatic list is active."
     raw_bot.send_message(m.from_user.id, f"📋 METHODS LIST MANAGER\n\n{status}", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodslist|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodslist|"))
 def methods_list_admin_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -1801,12 +1771,12 @@ def send_referral_card(uid):
 def referral_cmd(m):
     send_referral_card(m.from_user.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "open_referral_card"))
+@bot.callback_query_handler(func=lambda c: c.data == "open_referral_card")
 def open_referral_card_callback(c):
     bot.answer_callback_query(c.id)
     send_referral_card(c.from_user.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "open_points_card"))
+@bot.callback_query_handler(func=lambda c: c.data == "open_points_card")
 def open_points_card_callback(c):
     bot.answer_callback_query(c.id)
     fake = type("M", (), {"from_user": c.from_user})()
@@ -1859,57 +1829,93 @@ def chatid_cmd(m):
 def buy_vip_button(m):
     uid = m.from_user.id
     user = User(uid)
-    if user.is_vip():
-        return bot.send_message(uid, f"✅ You are already VIP!\n\n💰 Balance: {user.points():,} points", parse_mode="Markdown")
     cfg = get_cached_config()
-    vip_contact = (cfg.get("vip_contact") or "").strip()
-    if not vip_contact:
-        return bot.send_message(uid, "❌ VIP contact is not configured yet. Please contact the bot owner.")
-    try:
-        contact_url = normalize_url_or_username(vip_contact)
-    except Exception:
-        return bot.send_message(uid, "❌ The configured VIP username is invalid. Please inform the owner.")
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("⭐ Contact to Buy VIP", url=contact_url))
-    raw_bot.send_message(uid, "⭐ BUY VIP\n\nTap the button below to contact the official VIP seller.", reply_markup=kb)
+    
+    if user.is_vip():
+        bot.send_message(uid, "✅ **You are VIP!**\n\n💰 Points: {}".format(user.points()), parse_mode="Markdown")
+        return
+    
+    vip_msg = cfg.get("vip_msg", "💎 Buy VIP!")
+    vip_price_usd = cfg.get("vip_price", 50)
+    vip_price_points = cfg.get("vip_points_price", 5000)
+    vip_contact = cfg.get("vip_contact")
+    
+    binance_address = cfg.get("binance_address", "")
+    binance_coin = cfg.get("binance_coin", "USDT")
+    binance_network = cfg.get("binance_network", "TRC20")
+    binance_memo = cfg.get("binance_memo", "")
+    
+    message = f"💎 **VIP**\n\n{vip_msg}\n\n💰 Price:\n• ${vip_price_usd} USD\n• {vip_price_points} points\n\n"
+    
+    if binance_address:
+        message += f"💳 **Binance:**\nCoin: {binance_coin}\nNetwork: {binance_network}\nAddress: `{binance_address}`\n"
+        if binance_memo:
+            message += f"Memo: `{binance_memo}`\n"
+        message += f"Amount: ${vip_price_usd}\n\n"
+    
+    message += f"✨ Benefits:\n• All VIP methods\n• Priority support\n• No points needed\n\n"
+    
+    if vip_contact:
+        message += f"📞 Contact: {vip_contact}\n"
+    
+    message += f"\n🆔 ID: `{uid}`\n💰 Points: {user.points()}"
+    
+    kb = InlineKeyboardMarkup()
+    if user.points() >= vip_price_points:
+        kb.add(InlineKeyboardButton(f"⭐ Buy with {vip_price_points} pts", callback_data="buy_vip_points"))
+    if vip_contact:
+        if vip_contact.startswith("http"):
+            kb.add(InlineKeyboardButton("📞 Contact", url=vip_contact))
+        elif vip_contact.startswith("@"):
+            kb.add(InlineKeyboardButton("📞 Contact", url=f"https://t.me/{vip_contact.replace('@', '')}"))
+    
+    bot.send_message(uid, message, reply_markup=kb if kb.keyboard else None, parse_mode="Markdown")
 
 # =========================
 # ⚙️ ADMIN PANEL (SHORTENED FOR SPEED)
 # =========================
-def admin_menu(uid=None):
-    uid = ADMIN_ID if uid is None else int(uid)
+def admin_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    rows = [
-        ("📦 Upload FREE", "💎 Upload VIP"), ("🗑 Delete Folder", "✏️ Edit Price"),
-        ("✏️ Edit Name", "📝 Edit Content"), ("🔀 Move Folder", "⏳ Expire Method"),
-        ("✅ Restore Method", "👑 Add VIP"), ("👑 Remove VIP", "💰 Give Points"),
-        ("🎫 Generate Codes", "📊 View Codes"), ("📦 Points Packages", "👥 Admin Management"),
-        ("📞 Set Contacts", "⚙️ VIP Settings"), ("💳 Payment Methods", "🏦 Binance Settings"),
-        ("📸 Screenshot", "🔘 Button Manager"), ("🙈 Hide Button", "👁 Show Button"),
-        ("📢 Force Join", "👥 Join Notifications"), ("⚙️ Settings",),
-        ("📊 Stats", "📢 Broadcast"), ("🔔 Notify", "🛡 Group Management"),
-        ("📊 Leaderboard",), ("🔎 Search", "📣 Auto Posts"),
-        ("📥 Auto Import", "⏳ Pending Methods"), ("📌 Pin Methods", "📝 Edit Methods List"),
-        ("📣 Channel Approvals", "📨 Group Messenger"), ("🧾 Logs",), ("💾 Backup/Export",),
-    ]
-    for row in rows:
-        visible = [b for b in row if has_admin_permission(uid, permission_for_button(b))]
-        if visible: kb.row(*visible)
+
+    kb.row("📦 Upload FREE", "💎 Upload VIP")
+    kb.row("🗑 Delete Folder", "✏️ Edit Price")
+    kb.row("✏️ Edit Name", "📝 Edit Content")
+    kb.row("🔀 Move Folder", "⏳ Expire Method")
+    kb.row("✅ Restore Method", "👑 Add VIP")
+    kb.row("👑 Remove VIP", "💰 Give Points")
+    kb.row("🎫 Generate Codes", "📊 View Codes")
+    kb.row("📦 Points Packages", "👥 Admin Management")
+    kb.row("📞 Set Contacts", "⚙️ VIP Settings")
+    kb.row("💳 Payment Methods", "🏦 Binance Settings")
+    kb.row("📸 Screenshot", "🔘 Button Manager")
+    kb.row("🙈 Hide Button", "👁 Show Button")
+    kb.row("📢 Force Join", "👥 Join Notifications")
+    kb.row("⚙️ Settings")
+    kb.row("📊 Stats", "📢 Broadcast")
+    kb.row("🔔 Notify", "🛡 Group Management")
+    kb.row("📊 Leaderboard")
+    kb.row("🔎 Search", "📣 Auto Posts")
+    kb.row("📥 Auto Import", "⏳ Pending Methods")
+    kb.row("📌 Pin Methods", "📝 Edit Methods List")
+    kb.row("📣 Channel Approvals", "📨 Group Messenger")
+    kb.row("🧾 Logs")
+    kb.row("💾 Backup/Export")
     kb.row("❌ Exit")
+
     return kb
 
-@bot.message_handler(func=lambda m: m.text == "⚙️ ADMIN PANEL" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "⚙️ ADMIN PANEL" and is_admin(m.from_user.id))
 def open_admin(m):
-    bot.send_message(m.from_user.id, "⚙️ **Admin Panel**", reply_markup=admin_menu(m.from_user.id), parse_mode="Markdown")
+    bot.send_message(m.from_user.id, "⚙️ **Admin Panel**", reply_markup=admin_menu(), parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "❌ Exit" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "❌ Exit" and is_admin(m.from_user.id))
 def exit_admin(m):
     bot.send_message(m.from_user.id, "Exited", reply_markup=main_menu(m.from_user.id))
 
 # =========================
 # 📊 LEADERBOARD (NEW FEATURE)
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📊 Leaderboard" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📊 Leaderboard" and is_admin(m.from_user.id))
 def leaderboard_menu(m):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -1919,7 +1925,7 @@ def leaderboard_menu(m):
     )
     bot.send_message(m.from_user.id, "📊 **Leaderboard**\n\nSelect leaderboard type:", reply_markup=kb, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "top_referrals"))
+@bot.callback_query_handler(func=lambda c: c.data == "top_referrals")
 def top_referrals_cb(c):
     users = list(users_col.find({}).sort("refs", -1).limit(30))
     text = "🏆 **TOP 30 USERS BY REFERRALS** 🏆\n\n"
@@ -1936,7 +1942,7 @@ def top_referrals_cb(c):
     bot.edit_message_text(text, c.from_user.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "top_points"))
+@bot.callback_query_handler(func=lambda c: c.data == "top_points")
 def top_points_cb(c):
     users = list(users_col.find({}).sort("points", -1).limit(30))
     text = "💰 **TOP 30 USERS BY POINTS** 💰\n\n"
@@ -1953,7 +1959,7 @@ def top_points_cb(c):
     bot.edit_message_text(text, c.from_user.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "top_earned"))
+@bot.callback_query_handler(func=lambda c: c.data == "top_earned")
 def top_earned_cb(c):
     users = list(users_col.find({}).sort("total_points_earned", -1).limit(30))
     text = "⭐ **TOP 30 USERS BY POINTS EARNED** ⭐\n\n"
@@ -1986,7 +1992,7 @@ def start_upload(uid, cat, is_service=False):
 def upload_type_choice(m, cat, is_service):
     if m.text == "/cancel":
         upload_sessions.pop(m.from_user.id, None)
-        bot.send_message(m.from_user.id, "❌ Cancelled", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, "❌ Cancelled", reply_markup=admin_menu())
         return
     
     if m.text == "📄 Text":
@@ -1998,7 +2004,7 @@ def upload_type_choice(m, cat, is_service):
         msg = bot.send_message(m.from_user.id, f"📤 **Upload files**\n\nSend files, /done when finished:", reply_markup=kb, parse_mode="Markdown")
         bot.register_next_step_handler(msg, lambda x: upload_file_step(x, cat, m.from_user.id, [], is_service))
     else:
-        bot.send_message(m.from_user.id, "❌ Invalid", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, "❌ Invalid", reply_markup=admin_menu())
 
 def upload_text_name(m, cat, is_service):
     name = m.text
@@ -2023,13 +2029,13 @@ def upload_text_save(m, cat, name, price, is_service):
         if folder:
             folders_col.update_one({"_id": folder["_id"]}, {"$set": {"service_msg": text_content}})
     
-    bot.send_message(m.from_user.id, f"✅ Added!\n📌 #{number}\n📂 {name}\n💰 {price} pts", reply_markup=admin_menu(m.from_user.id), parse_mode="Markdown")
+    bot.send_message(m.from_user.id, f"✅ Added!\n📌 #{number}\n📂 {name}\n💰 {price} pts", reply_markup=admin_menu(), parse_mode="Markdown")
     upload_sessions.pop(m.from_user.id, None)
 
 def upload_file_step(m, cat, uid, files, is_service):
     if m.text == "/cancel":
         upload_sessions.pop(uid, None)
-        bot.send_message(uid, "❌ Cancelled", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(uid, "❌ Cancelled", reply_markup=admin_menu())
         return
     
     if m.text == "/done":
@@ -2061,7 +2067,7 @@ def upload_file_save(m, cat, name, files, is_service):
             msg = bot.send_message(m.from_user.id, "📝 **Service message:**", parse_mode="Markdown")
             bot.register_next_step_handler(msg, lambda x: service_msg_save(x, cat, name, number, price, files))
         else:
-            bot.send_message(m.from_user.id, f"✅ Uploaded!\n📌 #{number}\n📂 {name}\n💰 {price} pts\n📁 {len(files)} files", reply_markup=admin_menu(m.from_user.id), parse_mode="Markdown")
+            bot.send_message(m.from_user.id, f"✅ Uploaded!\n📌 #{number}\n📂 {name}\n💰 {price} pts\n📁 {len(files)} files", reply_markup=admin_menu(), parse_mode="Markdown")
             upload_sessions.pop(m.from_user.id, None)
     except:
         bot.send_message(m.from_user.id, "❌ Invalid price!")
@@ -2072,10 +2078,10 @@ def service_msg_save(m, cat, name, number, price, files):
     if folder:
         folders_col.update_one({"_id": folder["_id"]}, {"$set": {"service_msg": service_msg}})
     
-    bot.send_message(m.from_user.id, f"✅ Service added!\n📌 #{number}\n📂 {name}\n💰 {price} pts\n📁 {len(files)} files", reply_markup=admin_menu(m.from_user.id), parse_mode="Markdown")
+    bot.send_message(m.from_user.id, f"✅ Service added!\n📌 #{number}\n📂 {name}\n💰 {price} pts\n📁 {len(files)} files", reply_markup=admin_menu(), parse_mode="Markdown")
     upload_sessions.pop(m.from_user.id, None)
 
-@bot.message_handler(func=lambda m: m.text in ["📦 Upload FREE", "💎 Upload VIP"] and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text in ["📦 Upload FREE", "💎 Upload VIP"] and is_admin(m.from_user.id))
 def upload_handler(m):
     cats = {"📦 Upload FREE": "free", "💎 Upload VIP": "vip"}
     start_upload(m.from_user.id, cats[m.text], False)
@@ -2099,11 +2105,11 @@ def _method_select_keyboard(prefix, category=None, include_expired=True):
         kb.add(InlineKeyboardButton(label[:62], callback_data=f"{prefix}|{row['_id']}"))
     return kb
 
-@bot.message_handler(func=lambda m: m.text == "🔀 Move Folder" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🔀 Move Folder" and is_admin(m.from_user.id))
 def move_folder_start(m):
     raw_bot.send_message(m.from_user.id, "🔀 MOVE METHOD / FOLDER\n\nSelect what you want to move:", reply_markup=_method_select_keyboard("moveselect"))
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("moveselect|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("moveselect|"))
 def move_select_cb(c):
     if not is_admin(c.from_user.id): return
     from bson import ObjectId
@@ -2118,7 +2124,7 @@ def move_select_cb(c):
     raw_bot.send_message(c.from_user.id, f"Selected: {row.get('name')}\n\nChoose the destination:", reply_markup=kb)
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("movedest|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("movedest|"))
 def move_dest_cb(c):
     if not is_admin(c.from_user.id): return
     from bson import ObjectId
@@ -2136,7 +2142,7 @@ def move_dest_cb(c):
     admin_success(c.from_user.id, f"Moved {source.get('name')} to {parent or 'Main Level'}")
     bot.answer_callback_query(c.id,"Moved")
 
-@bot.message_handler(func=lambda m: m.text in ("⏳ Expire Method", "✅ Restore Method") and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text in ("⏳ Expire Method", "✅ Restore Method") and is_admin(m.from_user.id))
 def expire_restore_menu(m):
     mode = "expire" if m.text.startswith("⏳") else "restore"
     query = {"expired": {"$ne": True}} if mode == "expire" else {"expired": True}
@@ -2156,7 +2162,7 @@ def expire_restore_menu(m):
     )
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodstatusconfirm|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodstatusconfirm|"))
 def method_status_confirm_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -2185,7 +2191,7 @@ def method_status_confirm_cb(c):
         admin_error(c.from_user.id, exc)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodstatusapply|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodstatusapply|"))
 def method_status_apply_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -2215,11 +2221,11 @@ def method_status_apply_cb(c):
         admin_error(c.from_user.id, exc)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "methodstatuscancel"))
+@bot.callback_query_handler(func=lambda c: c.data == "methodstatuscancel")
 def method_status_cancel_cb(c):
     if is_admin(c.from_user.id):
         bot.answer_callback_query(c.id, "Cancelled")
-        raw_bot.send_message(c.from_user.id, "❌ Cancelled", reply_markup=admin_menu(c.from_user.id))
+        raw_bot.send_message(c.from_user.id, "❌ Cancelled", reply_markup=admin_menu())
 
 # =========================
 # 🗂 FOLDER ACTION PICKER
@@ -2243,29 +2249,29 @@ def folder_action_keyboard(action, page=0, per_page=20):
 def show_folder_action(uid, action, title):
     kb=folder_action_keyboard(action)
     if not kb.keyboard:
-        return bot.send_message(uid,"❌ No methods/folders found.",reply_markup=admin_menu(uid))
+        return bot.send_message(uid,"❌ No methods/folders found.",reply_markup=admin_menu())
     bot.send_message(uid,title,reply_markup=kb,parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "🗑 Delete Folder" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🗑 Delete Folder" and is_admin(m.from_user.id))
 def del_start(m): show_folder_action(m.from_user.id,"delete","🗑 **Select a method/folder to delete:**")
 
-@bot.message_handler(func=lambda m: m.text == "✏️ Edit Price" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "✏️ Edit Price" and is_admin(m.from_user.id))
 def edit_price_start(m): show_folder_action(m.from_user.id,"price","✏️ **Select a method/folder to edit price:**")
 
-@bot.message_handler(func=lambda m: m.text == "✏️ Edit Name" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "✏️ Edit Name" and is_admin(m.from_user.id))
 def edit_name_start(m): show_folder_action(m.from_user.id,"name","✏️ **Select a method/folder to rename:**")
 
-@bot.message_handler(func=lambda m: m.text == "📝 Edit Content" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📝 Edit Content" and is_admin(m.from_user.id))
 def edit_content_start(m): show_folder_action(m.from_user.id,"content","📝 **Select a method/folder to edit content:**")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("folderpage|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("folderpage|"))
 def folder_page_cb(c):
     if not is_admin(c.from_user.id): return bot.answer_callback_query(c.id,"Admin only",True)
     _,action,page=c.data.split("|")
     bot.edit_message_reply_markup(c.from_user.id,c.message.message_id,reply_markup=folder_action_keyboard(action,int(page)))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("folderact|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("folderact|"))
 def folder_action_cb(c):
     if not is_admin(c.from_user.id): return bot.answer_callback_query(c.id,"Admin only",True)
     try:
@@ -2287,7 +2293,7 @@ def folder_action_cb(c):
         bot.answer_callback_query(c.id)
     except Exception as exc: bot.answer_callback_query(c.id,str(exc),True)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("folderconfirm|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("folderconfirm|"))
 def folder_confirm_cb(c):
     if not is_admin(c.from_user.id): return
     try:
@@ -2324,7 +2330,7 @@ def folder_name_step(m):
 
 edit_sessions = {}
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "edit_text"))
+@bot.callback_query_handler(func=lambda c: c.data == "edit_text")
 def edit_text_cb(c):
     uid = c.from_user.id
     if uid not in edit_sessions:
@@ -2341,16 +2347,16 @@ def edit_text_cb(c):
 def save_edit_text(m):
     uid = m.from_user.id
     if uid not in edit_sessions:
-        bot.send_message(uid, "Session expired!", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(uid, "Session expired!", reply_markup=admin_menu())
         return
     
     s = edit_sessions[uid]
     fs.edit_content(s["cat"], s["name"], "text", m.text, s.get("parent"))
     folder=fs.get_by_number(s.get("number")) or fs.get_one(s["cat"],s["name"],s.get("parent")); send_method_notification("updated",folder or s)
-    bot.send_message(uid, f"✅ Text updated!", reply_markup=admin_menu(m.from_user.id))
+    bot.send_message(uid, f"✅ Text updated!", reply_markup=admin_menu())
     edit_sessions.pop(uid, None)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "edit_files"))
+@bot.callback_query_handler(func=lambda c: c.data == "edit_files")
 def edit_files_cb(c):
     uid = c.from_user.id
     if uid not in edit_sessions:
@@ -2368,7 +2374,7 @@ def process_edit_files(m):
     uid = m.from_user.id
     if m.text == "/cancel":
         edit_sessions.pop(uid, None)
-        bot.send_message(uid, "❌ Cancelled", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(uid, "❌ Cancelled", reply_markup=admin_menu())
         return
     
     if m.text == "/done":
@@ -2381,7 +2387,7 @@ def process_edit_files(m):
             return
         fs.edit_content(s["cat"], s["name"], "files", s["new_files"], s.get("parent"))
         folder=fs.get_by_number(s.get("number")) or fs.get_one(s["cat"],s["name"],s.get("parent")); send_method_notification("updated",folder or s)
-        bot.send_message(uid, f"✅ {len(s['new_files'])} file(s) updated!", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(uid, f"✅ {len(s['new_files'])} file(s) updated!", reply_markup=admin_menu())
         edit_sessions.pop(uid, None)
         return
     
@@ -2392,17 +2398,17 @@ def process_edit_files(m):
         bot.send_message(uid, "❌ Send documents, photos, or videos!")
     bot.register_next_step_handler(m, process_edit_files)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "edit_cancel"))
+@bot.callback_query_handler(func=lambda c: c.data == "edit_cancel")
 def edit_cancel_cb(c):
     edit_sessions.pop(c.from_user.id, None)
     bot.edit_message_text("❌ Cancelled", c.from_user.id, c.message.message_id)
-    bot.send_message(c.from_user.id, "Returning...", reply_markup=admin_menu(c.from_user.id))
+    bot.send_message(c.from_user.id, "Returning...", reply_markup=admin_menu())
     bot.answer_callback_query(c.id)
 
 # =========================
 # 👑 ADD VIP
 # =========================
-@bot.message_handler(func=lambda m: m.text == "👑 Add VIP" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "👑 Add VIP" and is_admin(m.from_user.id))
 def add_vip_start(m):
     msg = bot.send_message(m.from_user.id, "👑 **Add VIP**\n\nSend user ID or @username:", parse_mode="Markdown")
     bot.register_next_step_handler(msg, add_vip_process)
@@ -2437,7 +2443,7 @@ def add_vip_process(m):
 # =========================
 # 👑 REMOVE VIP
 # =========================
-@bot.message_handler(func=lambda m: m.text == "👑 Remove VIP" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "👑 Remove VIP" and is_admin(m.from_user.id))
 def remove_vip_start(m):
     msg = bot.send_message(m.from_user.id, "👑 **Remove VIP**\n\nSend user ID or @username:", parse_mode="Markdown")
     bot.register_next_step_handler(msg, remove_vip_process)
@@ -2472,7 +2478,7 @@ def remove_vip_process(m):
 # =========================
 # 💰 GIVE POINTS (FIXED - FULLY WORKING)
 # =========================
-@bot.message_handler(func=lambda m: m.text == "💰 Give Points" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "💰 Give Points" and is_admin(m.from_user.id))
 def give_points_start(m):
     msg = bot.send_message(m.from_user.id, 
         "💰 **Give Points**\n\n"
@@ -2536,7 +2542,7 @@ def give_points_process(m):
             f"➕ Added: {amount:,} points\n"
             f"💰 Previous: {old_balance:,}\n"
             f"💎 New balance: {new_balance:,}",
-            reply_markup=admin_menu(m.from_user.id),
+            reply_markup=admin_menu(),
         )
         try:
             raw_bot.send_message(
@@ -2557,7 +2563,7 @@ def give_points_process(m):
 # =========================
 # 🎫 GENERATE CODES (FIXED)
 # =========================
-@bot.message_handler(func=lambda m: m.text == "🎫 Generate Codes" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🎫 Generate Codes" and is_admin(m.from_user.id))
 def gen_codes_start(m):
     msg = bot.send_message(
         m.from_user.id,
@@ -2636,7 +2642,7 @@ def generate_codes_process(m):
 # =========================
 # 📊 VIEW CODES
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📊 View Codes" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📊 View Codes" and is_admin(m.from_user.id))
 def view_codes(m):
     codes = codesys.get_all_codes()
     if not codes:
@@ -2657,7 +2663,7 @@ def view_codes(m):
 # =========================
 # 📦 POINTS PACKAGES
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📦 Points Packages" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📦 Points Packages" and is_admin(m.from_user.id))
 def packages_cmd(m):
     pkgs = get_points_packages()
     text = "📦 **Points Packages**\n\n"
@@ -2716,131 +2722,73 @@ def pkg_commands(m):
         bot.send_message(m.from_user.id, f"❌ Use: /{cmd} ...")
 
 # =========================
-# 👥 ADMIN MANAGEMENT + LIMITS (OWNER ONLY)
+# 👥 ADMIN MANAGEMENT
 # =========================
-def admin_management_keyboard():
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(InlineKeyboardButton("➕ Add Admin", callback_data="adminmgr|add"),
-           InlineKeyboardButton("➖ Remove Admin", callback_data="adminmgr|remove"))
-    kb.add(InlineKeyboardButton("🔐 Permissions", callback_data="adminmgr|permissions"),
-           InlineKeyboardButton("📋 List Admins", callback_data="adminmgr|list"))
-    return kb
-
-@bot.message_handler(func=lambda m: m.text == "👥 Admin Management" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "👥 Admin Management" and is_admin(m.from_user.id))
 def admin_management_cmd(m):
-    if not is_owner(m.from_user.id):
-        return bot.send_message(m.from_user.id, "❌ Owner only!")
-    bot.send_message(m.from_user.id, "👥 ADMIN MANAGEMENT\n\nAdd admins and control exactly what each admin can use.", reply_markup=admin_management_keyboard())
-
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("adminmgr|")))
-def admin_management_callback(c):
-    if not is_owner(c.from_user.id):
-        return bot.answer_callback_query(c.id, "Owner only", True)
-    action = c.data.split("|", 1)[1]
-    if action == "add":
-        msg = bot.send_message(c.from_user.id, "Send the new admin's numeric Telegram user ID:")
-        bot.register_next_step_handler(msg, owner_add_admin_step)
-    elif action == "remove":
-        msg = bot.send_message(c.from_user.id, "Send the admin ID to remove:")
-        bot.register_next_step_handler(msg, owner_remove_admin_step)
-    elif action == "list":
-        send_admin_list(c.from_user.id)
-    elif action == "permissions":
-        send_permission_admin_picker(c.from_user.id)
-    bot.answer_callback_query(c.id)
-
-def owner_add_admin_step(m):
-    if not is_owner(m.from_user.id): return
-    try:
-        uid = int((m.text or "").strip())
-        if uid == ADMIN_ID: raise ValueError("That user is already the owner")
-        if not add_admin(uid, added_by=ADMIN_ID): raise ValueError("This user is already an admin")
-        bot.send_message(m.from_user.id, f"✅ Admin {uid} added with default limited permissions.", reply_markup=admin_menu(m.from_user.id))
-        try: bot.send_message(uid, "🎉 You are now an admin. The owner controls your available permissions.")
-        except Exception: pass
-    except Exception as exc: admin_error(m.from_user.id, exc)
-
-def owner_remove_admin_step(m):
-    if not is_owner(m.from_user.id): return
-    try:
-        uid = int((m.text or "").strip())
-        if not remove_admin(uid): raise ValueError("Admin not found or owner cannot be removed")
-        admin_success(m.from_user.id, f"Admin {uid} removed.")
-    except Exception as exc: admin_error(m.from_user.id, exc)
-
-def send_admin_list(uid):
-    lines = ["👥 ADMINS", ""]
-    for row in get_all_admins():
-        aid = row["_id"]
-        if aid == ADMIN_ID:
-            lines.append(f"👑 {aid} — Owner — Full access")
-        else:
-            perms = row.get("permissions") or []
-            names = [ADMIN_PERMISSION_LABELS.get(x, x) for x in perms]
-            lines.append(f"• {aid} — {', '.join(names) if names else 'No permissions'}")
-    raw_bot.send_message(uid, "\n".join(lines), reply_markup=admin_management_keyboard())
-
-def send_permission_admin_picker(uid):
-    kb = InlineKeyboardMarkup(row_width=1)
-    for row in get_all_admins():
-        if row["_id"] != ADMIN_ID:
-            kb.add(InlineKeyboardButton(str(row["_id"]), callback_data=f"adminperm|open|{row['_id']}"))
-    if not kb.keyboard:
-        return bot.send_message(uid, "No limited admins have been added yet.")
-    bot.send_message(uid, "Choose an admin to set limitations:", reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("adminperm|")))
-def admin_permission_callback(c):
-    if not is_owner(c.from_user.id):
-        return bot.answer_callback_query(c.id, "Owner only", True)
-    parts = c.data.split("|")
-    action, target = parts[1], int(parts[2])
-    if action == "toggle":
-        permission = parts[3]
-        row = admins_col.find_one({"_id": target})
-        if not row: return bot.answer_callback_query(c.id, "Admin not found", True)
-        permissions = set(row.get("permissions") or [])
-        if permission in permissions: permissions.remove(permission)
-        else: permissions.add(permission)
-        admins_col.update_one({"_id": target}, {"$set": {"permissions": sorted(permissions)}})
-    row = admins_col.find_one({"_id": target}) or {}
-    current = set(row.get("permissions") or [])
-    kb = InlineKeyboardMarkup(row_width=1)
-    for key, label in ADMIN_PERMISSION_LABELS.items():
-        if key == "admins": continue
-        mark = "✅" if key in current else "❌"
-        kb.add(InlineKeyboardButton(f"{mark} {label}", callback_data=f"adminperm|toggle|{target}|{key}"))
-    kb.add(InlineKeyboardButton("⬅️ Admin List", callback_data="adminmgr|permissions"))
-    text = f"🔐 ADMIN LIMITS\n\nAdmin: {target}\nTap a permission to enable or disable it. Changes apply immediately."
-    try: bot.edit_message_text(text, c.from_user.id, c.message.message_id, reply_markup=kb)
-    except Exception: bot.send_message(c.from_user.id, text, reply_markup=kb)
-    bot.answer_callback_query(c.id, "Updated" if action == "toggle" else "Opened")
+    if m.from_user.id != ADMIN_ID:
+        bot.send_message(m.from_user.id, "❌ Owner only!")
+        return
+    
+    admins = get_all_admins()
+    text = "👥 **Admins**\n\n"
+    for a in admins:
+        owner = " 👑" if a["_id"] == ADMIN_ID else ""
+        text += f"• `{a['_id']}`{owner}\n"
+    text += "\n/addadmin id\n/removeadmin id\n/listadmins"
+    bot.send_message(m.from_user.id, text, parse_mode="Markdown")
 
 @bot.message_handler(commands=["addadmin", "removeadmin", "listadmins"])
 def admin_commands(m):
-    if not is_owner(m.from_user.id): return
+    if m.from_user.id != ADMIN_ID:
+        return
+    
     cmd = m.text.split()[0][1:]
-    if cmd == "listadmins": return send_admin_list(m.from_user.id)
+    
+    if cmd == "listadmins":
+        admins = get_all_admins()
+        text = "👥 Admins:\n"
+        for a in admins:
+            text += f"• `{a['_id']}`\n"
+        bot.send_message(m.from_user.id, text, parse_mode="Markdown")
+        return
+    
     try:
-        uid = int(m.text.split()[1])
+        _, uid = m.text.split()
+        uid = int(uid)
+        
         if cmd == "addadmin":
-            if not add_admin(uid, added_by=ADMIN_ID): raise ValueError("Already an admin")
-            admin_success(m.from_user.id, f"Admin {uid} added with limited default permissions.")
+            if admins_col.find_one({"_id": uid}):
+                bot.send_message(m.from_user.id, "❌ Already admin!")
+                return
+            admins_col.insert_one({"_id": uid, "added_at": time.time()})
+            bot.send_message(m.from_user.id, f"✅ Admin {uid} added!")
+            try:
+                bot.send_message(uid, "🎉 You are now an admin!")
+            except:
+                pass
         else:
-            if not remove_admin(uid): raise ValueError("Admin not found or owner cannot be removed")
-            admin_success(m.from_user.id, f"Admin {uid} removed.")
-    except Exception as exc: admin_error(m.from_user.id, exc)
+            if uid == ADMIN_ID:
+                bot.send_message(m.from_user.id, "❌ Cannot remove owner!")
+                return
+            result = admins_col.delete_one({"_id": uid})
+            if result.deleted_count > 0:
+                bot.send_message(m.from_user.id, f"✅ Admin {uid} removed!")
+            else:
+                bot.send_message(m.from_user.id, "❌ Not an admin!")
+    except:
+        bot.send_message(m.from_user.id, f"❌ Use: /{cmd} user_id")
 
 # =========================
 # 📞 SET CONTACTS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📞 Set Contacts" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📞 Set Contacts" and is_admin(m.from_user.id))
 def set_contacts_menu(m):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("💰 Points Contact", callback_data="set_points"), InlineKeyboardButton("⭐ VIP Contact", callback_data="set_vip"), InlineKeyboardButton("📋 View", callback_data="view_contacts"))
     bot.send_message(m.from_user.id, "📞 **Contacts**", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_points"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_points")
 def set_points_contact(c):
     msg = bot.send_message(c.from_user.id, "💰 Send @username or link:\nSend 'none' to remove", parse_mode="Markdown")
     bot.register_next_step_handler(msg, save_points_contact)
@@ -2859,28 +2807,25 @@ def save_points_contact(m):
     else:
         bot.send_message(m.from_user.id, "❌ Invalid!")
         return
-    bot.send_message(m.from_user.id, "✅ Updated!", reply_markup=admin_menu(m.from_user.id))
+    bot.send_message(m.from_user.id, "✅ Updated!", reply_markup=admin_menu())
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_vip")
 def set_vip_contact(c):
-    if not is_owner(c.from_user.id): return bot.answer_callback_query(c.id, "Owner only", True)
     msg = bot.send_message(c.from_user.id, "⭐ Send @username or link:\nSend 'none' to remove", parse_mode="Markdown")
     bot.register_next_step_handler(msg, save_vip_contact)
     bot.answer_callback_query(c.id)
 
 def save_vip_contact(m):
-    if not is_owner(m.from_user.id): return
-    try:
-        value = (m.text or "").strip()
-        if value.lower() == "none": set_config("vip_contact", None)
-        else:
-            url = normalize_url_or_username(value)
-            username = "@" + url.rstrip("/").split("/")[-1]
-            set_config("vip_contact", username)
-        bot.send_message(m.from_user.id, "✅ VIP username updated!", reply_markup=admin_menu(m.from_user.id))
-    except Exception as exc: admin_error(m.from_user.id, exc)
+    if m.text.lower() == "none":
+        set_config("vip_contact", None)
+    elif m.text.startswith("http") or m.text.startswith("@"):
+        set_config("vip_contact", m.text)
+    else:
+        bot.send_message(m.from_user.id, "❌ Invalid!")
+        return
+    bot.send_message(m.from_user.id, "✅ Updated!", reply_markup=admin_menu())
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "view_contacts"))
+@bot.callback_query_handler(func=lambda c: c.data == "view_contacts")
 def view_contacts_cb(c):
     cfg = get_config()
     points = cfg.get("contact_username") or cfg.get("contact_link") or "Not set"
@@ -2904,11 +2849,11 @@ def button_manager_keyboard():
     kb.add(InlineKeyboardButton("❌ Close", callback_data="btnmgr|close"))
     return kb
 
-@bot.message_handler(func=lambda m: m.text == "🔘 Button Manager" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🔘 Button Manager" and is_admin(m.from_user.id))
 def button_manager_cmd(m):
     bot.send_message(m.from_user.id, "🔘 **Button Manager**\n\nChoose an action:", reply_markup=button_manager_keyboard(), parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("btnmgr|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("btnmgr|"))
 def button_manager_callback(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admin only", True)
@@ -2946,7 +2891,7 @@ def button_manager_callback(c):
             return bot.answer_callback_query(c.id, "Continue in chat")
     except Exception as exc:
         bot.answer_callback_query(c.id, f"Error: {exc}", True)
-        bot.send_message(c.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu(c.from_user.id))
+        bot.send_message(c.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu())
 
 def button_name_step(m):
     try:
@@ -2959,7 +2904,7 @@ def button_name_step(m):
         msg = bot.send_message(m.from_user.id, prompt)
         bot.register_next_step_handler(msg, button_data_step)
     except Exception as exc:
-        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu())
 
 def button_data_step(m):
     try:
@@ -2971,9 +2916,9 @@ def button_data_step(m):
         else:
             if not data.isdigit() or not fs.get_by_number(int(data)): raise ValueError("Folder number not found")
         add_custom_button(state["text"], state["type"], data)
-        raw_bot.send_message(m.from_user.id, f"✅ Process Complete\nButton added: {state['text']}", reply_markup=admin_menu(m.from_user.id))
+        raw_bot.send_message(m.from_user.id, f"✅ Process Complete\nButton added: {state['text']}", reply_markup=admin_menu())
     except Exception as exc:
-        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu())
 
 # =========================
 # 📢 FORCE JOIN: CHANNELS + GROUPS
@@ -2990,11 +2935,11 @@ def force_join_menu_keyboard():
     kb.add(InlineKeyboardButton("❌ Close", callback_data="force|close"))
     return kb
 
-@bot.message_handler(func=lambda m: m.text == "📢 Force Join" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📢 Force Join" and is_admin(m.from_user.id))
 def force_join_menu(m):
     bot.send_message(m.from_user.id, "📢 **Force Join Manager**\n\nFor private groups, use the numeric chat ID (`-100...`). The bot must be an admin.", reply_markup=force_join_menu_keyboard(), parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("force|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("force|"))
 def force_join_callback(c):
     if not is_admin(c.from_user.id): return bot.answer_callback_query(c.id, "Admin only", True)
     _, action, *rest = c.data.split("|")
@@ -3022,7 +2967,7 @@ def force_join_callback(c):
             if index<0 or index>=len(items):raise ValueError("Item no longer exists")
             removed=items.pop(index);set_config(key,items);bot.edit_message_text(f"✅ Process Complete\nRemoved: {removed}",c.from_user.id,c.message.message_id);return bot.answer_callback_query(c.id,"Removed")
     except Exception as exc:
-        bot.answer_callback_query(c.id,f"Error: {exc}",True);bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(c.from_user.id))
+        bot.answer_callback_query(c.id,f"Error: {exc}",True);bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 def force_add_step(m):
     try:
@@ -3040,9 +2985,9 @@ def force_add_step(m):
         normalized=str(chat.id) if value.lstrip("-").isdigit() else value
         if normalized in items:raise ValueError("Already added")
         items.append(normalized);set_config(state["force_key"],items)
-        bot.send_message(m.from_user.id,f"✅ Process Complete\nAdded: {normalized}",reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id,f"✅ Process Complete\nAdded: {normalized}",reply_markup=admin_menu())
     except Exception as exc:
-        bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 # =========================
 # 👥 NEW USER JOIN NOTIFICATIONS
@@ -3056,11 +3001,11 @@ def join_notification_keyboard():
     kb.add(InlineKeyboardButton("📋 View Settings",callback_data="joinnotify|view"))
     return kb
 
-@bot.message_handler(func=lambda m:m.text=="👥 Join Notifications" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m:m.text=="👥 Join Notifications" and is_admin(m.from_user.id))
 def join_notification_menu(m):
     bot.send_message(m.from_user.id,"👥 **Notification Settings**\n\nAccepts @username, username, t.me link, or numeric ID. Bot must be admin.",reply_markup=join_notification_keyboard(),parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("joinnotify|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("joinnotify|"))
 def join_notification_cb(c):
     if not is_admin(c.from_user.id):return bot.answer_callback_query(c.id,"Admin only",True)
     action=c.data.split("|")[1]
@@ -3097,42 +3042,42 @@ def save_join_notification_group(m):
 # =========================
 # ⚙️ SETTINGS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "⚙️ Settings" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "⚙️ Settings" and is_admin(m.from_user.id))
 def settings_cmd(m):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("⭐ VIP Msg", callback_data="set_vip_msg"), InlineKeyboardButton("🏠 Welcome", callback_data="set_welcome"), InlineKeyboardButton("💰 Ref Reward", callback_data="set_reward"), InlineKeyboardButton("💵 Points/$", callback_data="set_ppd"))
     bot.send_message(m.from_user.id, "⚙️ **Settings**", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip_msg"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_vip_msg")
 def set_vip_msg_cb(c):
     msg = bot.send_message(c.from_user.id, "Send new VIP message:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("vip_msg", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("vip_msg", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_welcome"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_welcome")
 def set_welcome_cb(c):
     msg = bot.send_message(c.from_user.id, "Send new welcome message:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("welcome", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("welcome", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_reward"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_reward")
 def set_reward_cb(c):
     current = get_config().get("ref_reward", 5)
     msg = bot.send_message(c.from_user.id, f"Current: {current}\nSend new amount:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("ref_reward", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points!", reply_markup=admin_menu(x.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("ref_reward", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points!", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_ppd"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_ppd")
 def set_ppd_cb(c):
     current = get_config().get("points_per_dollar", 100)
     msg = bot.send_message(c.from_user.id, f"Current: {current} pts = $1\nSend new value:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("points_per_dollar", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} pts = $1!", reply_markup=admin_menu(x.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("points_per_dollar", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} pts = $1!", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
 # =========================
 # 📊 STATS (FIXED VIP COUNT)
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📊 Stats" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📊 Stats" and is_admin(m.from_user.id))
 def stats_cmd(m):
     total = users_col.count_documents({})
     vip = users_col.count_documents({"vip": True})
@@ -3182,13 +3127,13 @@ def stats_cmd(m):
 # =========================
 # 📢 BROADCAST
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📢 Broadcast" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📢 Broadcast" and is_admin(m.from_user.id))
 def broadcast_cmd(m):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(InlineKeyboardButton("All", callback_data="bc_all"), InlineKeyboardButton("VIP", callback_data="bc_vip"), InlineKeyboardButton("Free", callback_data="bc_free"))
     bot.send_message(m.from_user.id, "📢 Broadcast to:", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("bc_")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("bc_"))
 def broadcast_target_cb(c):
     target = c.data[3:]
     msg = bot.send_message(c.from_user.id, f"Send message to {target.upper()} users:", parse_mode="Markdown")
@@ -3235,42 +3180,42 @@ def send_broadcast(m, target):
 @bot.message_handler(commands=["legacy_notify_toggle_disabled"])
 def toggle_notify_cmd(m):
     cfg=get_config(); new=not cfg.get("method_notify_enabled",True);set_config("method_notify_enabled",new)
-    bot.send_message(m.from_user.id,f"🔔 Method upload/update notifications: {'ON' if new else 'OFF'}",reply_markup=admin_menu(m.from_user.id))
+    bot.send_message(m.from_user.id,f"🔔 Method upload/update notifications: {'ON' if new else 'OFF'}",reply_markup=admin_menu())
 
 # =========================
 # 🏦 BINANCE SETTINGS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "🏦 Binance Settings" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🏦 Binance Settings" and is_admin(m.from_user.id))
 def binance_settings_menu(m):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("💰 Coin", callback_data="set_binance_coin"), InlineKeyboardButton("🌐 Network", callback_data="set_binance_network"), InlineKeyboardButton("📍 Address", callback_data="set_binance_address"), InlineKeyboardButton("📝 Memo", callback_data="set_binance_memo"), InlineKeyboardButton("📋 View", callback_data="view_binance_settings"))
     bot.send_message(m.from_user.id, "🏦 **Binance**", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_binance_coin"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_binance_coin")
 def set_binance_coin_cb(c):
     msg = bot.send_message(c.from_user.id, f"Coin (USDT, BUSD, BTC):\nCurrent: {get_config().get('binance_coin', 'USDT')}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("binance_coin", x.text.upper()) or bot.send_message(x.from_user.id, f"✅ Set to {x.text.upper()}", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("binance_coin", x.text.upper()) or bot.send_message(x.from_user.id, f"✅ Set to {x.text.upper()}", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_binance_network"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_binance_network")
 def set_binance_network_cb(c):
     msg = bot.send_message(c.from_user.id, f"Network (TRC20, BEP20, ERC20):\nCurrent: {get_config().get('binance_network', 'TRC20')}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("binance_network", x.text.upper()) or bot.send_message(x.from_user.id, f"✅ Set to {x.text.upper()}", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("binance_network", x.text.upper()) or bot.send_message(x.from_user.id, f"✅ Set to {x.text.upper()}", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_binance_address"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_binance_address")
 def set_binance_address_cb(c):
     msg = bot.send_message(c.from_user.id, f"Address:\nCurrent: {get_config().get('binance_address', 'Not set')}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("binance_address", x.text) or bot.send_message(x.from_user.id, f"✅ Address saved!", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("binance_address", x.text) or bot.send_message(x.from_user.id, f"✅ Address saved!", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_binance_memo"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_binance_memo")
 def set_binance_memo_cb(c):
     msg = bot.send_message(c.from_user.id, f"Memo/Tag (send 'none' to clear):\nCurrent: {get_config().get('binance_memo', 'None')}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("binance_memo", "" if x.text.lower() == "none" else x.text) or bot.send_message(x.from_user.id, f"✅ Memo saved!", reply_markup=admin_menu(x.from_user.id)))
+    bot.register_next_step_handler(msg, lambda x: set_config("binance_memo", "" if x.text.lower() == "none" else x.text) or bot.send_message(x.from_user.id, f"✅ Memo saved!", reply_markup=admin_menu()))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "view_binance_settings"))
+@bot.callback_query_handler(func=lambda c: c.data == "view_binance_settings")
 def view_binance_settings_cb(c):
     cfg = get_config()
     text = f"🏦 **Binance**\n\n💰 Coin: {cfg.get('binance_coin', 'USDT')}\n🌐 Network: {cfg.get('binance_network', 'TRC20')}\n📍 Address: `{cfg.get('binance_address', 'Not set')}`\n📝 Memo: `{cfg.get('binance_memo', 'None') or 'None'}`\n📸 Screenshot: {'Yes' if cfg.get('require_screenshot', True) else 'No'}"
@@ -3280,7 +3225,7 @@ def view_binance_settings_cb(c):
 # =========================
 # 📸 SCREENSHOT
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📸 Screenshot" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📸 Screenshot" and is_admin(m.from_user.id))
 def screenshot_setting_menu(m):
     cfg = get_config()
     current = cfg.get("require_screenshot", True)
@@ -3289,7 +3234,7 @@ def screenshot_setting_menu(m):
     kb.add(InlineKeyboardButton("🔘 Toggle", callback_data="toggle_screenshot"))
     bot.send_message(m.from_user.id, f"📸 **Screenshot**\n\n{status}\n\nRequire screenshot for payments.", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "toggle_screenshot"))
+@bot.callback_query_handler(func=lambda c: c.data == "toggle_screenshot")
 def toggle_screenshot_cb(c):
     cfg = get_config()
     current = cfg.get("require_screenshot", True)
@@ -3297,12 +3242,12 @@ def toggle_screenshot_cb(c):
     new_status = "ENABLED" if not current else "DISABLED"
     bot.answer_callback_query(c.id, f"Screenshot {new_status}!")
     bot.edit_message_text(f"✅ Screenshot {new_status}!", c.from_user.id, c.message.message_id)
-    bot.send_message(c.from_user.id, "Returning...", reply_markup=admin_menu(c.from_user.id))
+    bot.send_message(c.from_user.id, "Returning...", reply_markup=admin_menu())
 
 # =========================
 # 💳 PAYMENT METHODS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "💳 Payment Methods" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "💳 Payment Methods" and is_admin(m.from_user.id))
 def payment_methods_menu(m):
     methods = get_config().get("payment_methods", ["💳 Binance", "💵 USDT"])
     text = "💳 **Payment Methods**\n\n"
@@ -3350,43 +3295,43 @@ def payment_commands(m):
 # =========================
 # ⚙️ VIP SETTINGS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "⚙️ VIP Settings" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "⚙️ VIP Settings" and is_admin(m.from_user.id))
 def vip_settings_menu(m):
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("💰 USD Price", callback_data="set_vip_price_usd"), InlineKeyboardButton("💎 Points Price", callback_data="set_vip_price_points"), InlineKeyboardButton("👥 Referral VIP", callback_data="set_ref_vip_count"), InlineKeyboardButton("🛒 Purchase VIP", callback_data="set_ref_purchase_count"), InlineKeyboardButton("📅 Duration", callback_data="set_vip_duration"), InlineKeyboardButton("📋 View", callback_data="view_vip_settings"))
     bot.send_message(m.from_user.id, "⚙️ **VIP Settings**", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip_price_usd"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_vip_price_usd")
 def set_vip_price_usd_cb(c):
     msg = bot.send_message(c.from_user.id, f"USD Price:\nCurrent: ${get_config().get('vip_price', 50)}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("vip_price", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to ${x.text}", reply_markup=admin_menu(c.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("vip_price", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to ${x.text}", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip_price_points"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_vip_price_points")
 def set_vip_price_points_cb(c):
     msg = bot.send_message(c.from_user.id, f"Points Price:\nCurrent: {get_config().get('vip_points_price', 5000)}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("vip_points_price", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points", reply_markup=admin_menu(c.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("vip_points_price", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_ref_vip_count"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_ref_vip_count")
 def set_ref_vip_count_cb(c):
     msg = bot.send_message(c.from_user.id, f"Referrals for VIP:\nCurrent: {get_config().get('referral_vip_count', 50)}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("referral_vip_count", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} referrals", reply_markup=admin_menu(c.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("referral_vip_count", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} referrals", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_ref_purchase_count"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_ref_purchase_count")
 def set_ref_purchase_count_cb(c):
     msg = bot.send_message(c.from_user.id, f"Referral Purchases for VIP:\nCurrent: {get_config().get('referral_purchase_count', 10)}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("referral_purchase_count", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} purchases", reply_markup=admin_menu(c.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("referral_purchase_count", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} purchases", reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip_duration"))
+@bot.callback_query_handler(func=lambda c: c.data == "set_vip_duration")
 def set_vip_duration_cb(c):
     msg = bot.send_message(c.from_user.id, f"VIP Duration (days, 0 = permanent):\nCurrent: {get_config().get('vip_duration_days', 30)}", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: set_config("vip_duration_days", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} days" + (" (permanent)" if int(x.text) == 0 else ""), reply_markup=admin_menu(c.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("vip_duration_days", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} days" + (" (permanent)" if int(x.text) == 0 else ""), reply_markup=admin_menu()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "view_vip_settings"))
+@bot.callback_query_handler(func=lambda c: c.data == "view_vip_settings")
 def view_vip_settings_cb(c):
     cfg = get_config()
     text = f"📋 **VIP Settings**\n\n💰 USD: ${cfg.get('vip_price', 50)}\n💎 Points: {cfg.get('vip_points_price', 5000)}\n👥 Referrals: {cfg.get('referral_vip_count', 50)}\n🛒 Purchases: {cfg.get('referral_purchase_count', 10)}\n📅 Duration: {cfg.get('vip_duration_days', 30)} days" + (" (permanent)" if cfg.get('vip_duration_days', 30) == 0 else "")
@@ -3396,7 +3341,7 @@ def view_vip_settings_cb(c):
 # =========================
 # 🔗 ADD CUSTOM LINK
 # =========================
-@bot.message_handler(func=lambda m: m.text == "🔗 Add Custom Link" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🔗 Add Custom Link" and is_admin(m.from_user.id))
 def add_custom_link_cmd(m):
     msg = bot.send_message(m.from_user.id, "🔗 **Add Link**\n\nSend: `text|url`\nExample: `Website|https://example.com`", parse_mode="Markdown")
     bot.register_next_step_handler(msg, add_custom_link_process)
@@ -3411,14 +3356,14 @@ def add_custom_link_process(m):
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         add_custom_button(text, "link", url)
-        bot.send_message(m.from_user.id, f"✅ Added: {text}", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, f"✅ Added: {text}", reply_markup=admin_menu())
     except:
         bot.send_message(m.from_user.id, "❌ Invalid format!")
 
 # =========================
 # 📋 VIEW LINKS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "📋 View Links" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📋 View Links" and is_admin(m.from_user.id))
 def view_links_cmd(m):
     btns = get_custom_buttons()
     if not btns:
@@ -3448,7 +3393,7 @@ def log_event(action, actor=None, target=None, details=None, level="info"):
         pass
 
 def done(uid, extra=""):
-    bot.send_message(uid, "✅ Done Successfully" + (f"\n{extra}" if extra else ""), reply_markup=admin_menu(uid))
+    bot.send_message(uid, "✅ Done Successfully" + (f"\n{extra}" if extra else ""), reply_markup=admin_menu())
 
 def safe_admin(handler):
     @wraps(handler)
@@ -3483,7 +3428,7 @@ def atomic_adjust_points(uid, amount, reason="manual", admin_id=None, note=None)
 
 
 
-@bot.message_handler(func=lambda m: m.text == "💾 Backup/Export" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "💾 Backup/Export" and is_admin(m.from_user.id))
 def backup_export_menu(m):
     bot.send_message(m.from_user.id,"💾 **Backup / Export**\n\n`/backup`\n`/export users`\n`/export vip`\n`/export referrals`\n`/export purchases`\n`/export payments`",parse_mode="Markdown")
 
@@ -3507,7 +3452,7 @@ def backup_export_commands(m):
 
 
 
-@bot.message_handler(func=lambda m: m.text == "📣 Auto Posts" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📣 Auto Posts" and is_admin(m.from_user.id))
 def auto_posts_menu(m):
     bot.send_message(m.from_user.id,"📣 **Auto Posts Manager**\n\nChoose an action:",reply_markup=auto_posts_keyboard(),parse_mode="Markdown")
 
@@ -3525,7 +3470,7 @@ def auto_post_item_keyboard(action):
         kb.add(InlineKeyboardButton(label,callback_data=f"autoui|do|{action}|{x['_id']}"))
     return kb
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("autoui|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("autoui|"))
 def auto_ui_callback(c):
     if not is_admin(c.from_user.id):return bot.answer_callback_query(c.id,"Admin only",True)
     parts=c.data.split("|");action=parts[1]
@@ -3548,7 +3493,7 @@ def auto_ui_callback(c):
         if action=="create":
             mode=parts[2];_pending_auto[c.from_user.id]={"schedule":"every_hours" if mode=="hours" else "daily"}
             msg=bot.send_message(c.from_user.id,"Send one or multiple target channels/groups. Separate them with commas or new lines.\n\nExamples:\n`@channel1, @channel2`\n`-1001234567890`",parse_mode="Markdown");bot.register_next_step_handler(msg,auto_target_step);return bot.answer_callback_query(c.id,"Continue in chat")
-    except Exception as exc:bot.answer_callback_query(c.id,f"Error: {exc}",True);bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(c.from_user.id))
+    except Exception as exc:bot.answer_callback_query(c.id,f"Error: {exc}",True);bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 def auto_target_step(m):
     try:
@@ -3571,7 +3516,7 @@ def auto_target_step(m):
         bot.register_next_step_handler(msg, auto_schedule_step)
     except Exception as exc:
         _pending_auto.pop(m.from_user.id, None)
-        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu(m.from_user.id))
+        bot.send_message(m.from_user.id, f"❌ Process Failed\n{exc}", reply_markup=admin_menu())
 
 def auto_schedule_step(m):
     try:
@@ -3584,7 +3529,7 @@ def auto_schedule_step(m):
         state["value"]=value
         msg=bot.send_message(m.from_user.id,"Now send or forward the post content:")
         bot.register_next_step_handler(msg,auto_content_step)
-    except Exception as exc:_pending_auto.pop(m.from_user.id,None);bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(m.from_user.id))
+    except Exception as exc:_pending_auto.pop(m.from_user.id,None);bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 
 def normalize_post_button_url(value):
@@ -3745,7 +3690,7 @@ def save_auto_post(m):
     except Exception as exc:
         admin_error(m.from_user.id, exc)
 
-@bot.message_handler(func=lambda m: m.text == "📥 Auto Import" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📥 Auto Import" and is_admin(m.from_user.id))
 def auto_import_menu(m):
     bot.send_message(m.from_user.id,"📥 **Auto Import / Upload**\n\nChoose an action:",reply_markup=auto_import_keyboard(),parse_mode="Markdown")
 
@@ -3766,7 +3711,7 @@ def auto_import_keyboard():
     return kb
 
 _import_state={}
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("importui|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("importui|"))
 def import_ui_callback(c):
     if not is_admin(c.from_user.id):return bot.answer_callback_query(c.id,"Admin only",True)
     action=c.data.split("|")[1]
@@ -3808,12 +3753,12 @@ def import_ui_callback(c):
             _import_state[c.from_user.id]={"step":"category", "old_import": action == "oldmethod"};kb=InlineKeyboardMarkup(row_width=2)
             for cat,label in [("free","FREE"),("vip","VIP"),("apps","APPS"),("services","SERVICES")]:kb.add(InlineKeyboardButton(label,callback_data=f"importcat|{cat}"))
             bot.send_message(c.from_user.id,"Choose destination category:",reply_markup=kb);return bot.answer_callback_query(c.id)
-    except Exception as exc:bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(c.from_user.id))
+    except Exception as exc:bot.send_message(c.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 def import_add_source_step(m):
     try:
-        src=normalize_chat_reference(m.text);bot.get_chat(src);source_chats_col.update_one({'_id':src},{'$set':{'active':True,'added_at':now_ts()}},upsert=True);bot.send_message(m.from_user.id,f"✅ Process Complete\nSource added: {src}",reply_markup=admin_menu(m.from_user.id))
-    except Exception as exc:bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(m.from_user.id))
+        src=normalize_chat_reference(m.text);bot.get_chat(src);source_chats_col.update_one({'_id':src},{'$set':{'active':True,'added_at':now_ts()}},upsert=True);bot.send_message(m.from_user.id,f"✅ Process Complete\nSource added: {src}",reply_markup=admin_menu())
+    except Exception as exc:bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 def import_set_category_source(m):
     try:
@@ -3826,7 +3771,7 @@ def import_set_category_source(m):
         admin_success(m.from_user.id,f"{st['set_source_category'].upper()} auto-import channel set: {chat.id}")
     except Exception as exc: admin_error(m.from_user.id,exc)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("importcat|")))
+@bot.callback_query_handler(func=lambda c:c.data.startswith("importcat|"))
 def import_category_cb(c):
     if not is_admin(c.from_user.id):return
     _import_state[c.from_user.id]={"category":c.data.split("|",1)[1]};msg=bot.send_message(c.from_user.id,"Send price in points (0 for free):");bot.register_next_step_handler(msg,import_price_step);bot.answer_callback_query(c.id)
@@ -3838,14 +3783,14 @@ def import_price_step(m):
         state["price"]=price
         prompt = "Forward the old method post from your group/channel to me now:" if state.get("old_import") else "Now send or forward the method file/message:"
         msg=bot.send_message(m.from_user.id,prompt);bot.register_next_step_handler(msg,import_method_step)
-    except Exception as exc:_import_state.pop(m.from_user.id,None);bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(m.from_user.id))
+    except Exception as exc:_import_state.pop(m.from_user.id,None);bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 def import_method_step(m):
     try:
         state=_import_state.pop(m.from_user.id,None)
         if not state:raise ValueError("Session expired")
-        name=((m.text or m.caption or 'Imported Method').strip().splitlines()[0][:100]);files=[{'chat':m.chat.id,'msg':m.message_id,'type':m.content_type}];number=fs.add(state['category'],name,files,state['price']);send_method_notification('uploaded',fs.get_by_number(number) or {'cat':state['category'],'name':name,'number':number,'price':state['price']});log_event('method_imported',m.from_user.id,number,{'name':name});raw_bot.send_message(m.from_user.id,f"✅ Process Complete\nImported: {name}",reply_markup=admin_menu(m.from_user.id))
-    except Exception as exc:bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu(m.from_user.id))
+        name=((m.text or m.caption or 'Imported Method').strip().splitlines()[0][:100]);files=[{'chat':m.chat.id,'msg':m.message_id,'type':m.content_type}];number=fs.add(state['category'],name,files,state['price']);send_method_notification('uploaded',fs.get_by_number(number) or {'cat':state['category'],'name':name,'number':number,'price':state['price']});log_event('method_imported',m.from_user.id,number,{'name':name});raw_bot.send_message(m.from_user.id,f"✅ Process Complete\nImported: {name}",reply_markup=admin_menu())
+    except Exception as exc:bot.send_message(m.from_user.id,f"❌ Process Failed\n{exc}",reply_markup=admin_menu())
 
 @bot.my_chat_member_handler()
 def remember_admin_chat(update):
@@ -4383,12 +4328,12 @@ def _group_management_keyboard():
     return kb
 
 
-@bot.message_handler(func=lambda m: m.text == "🛡 Group Management" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🛡 Group Management" and is_admin(m.from_user.id))
 def group_management_menu(m):
     raw_bot.send_message(m.from_user.id, "🛡 GROUP MANAGEMENT\n\nManage promotion protection, VIP exemptions and method alerts.", reply_markup=_group_management_keyboard())
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupmgr|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupmgr|"))
 def group_management_callback(c):
     if not is_admin(c.from_user.id):
         return
@@ -4491,7 +4436,7 @@ def save_group_warning_limit(m):
         admin_error(m.from_user.id, exc)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupwarnaction|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupwarnaction|"))
 def group_warning_action_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4555,7 +4500,7 @@ def send_rules_group_picker(admin_id):
     raw_bot.send_message(admin_id, "Select the group where rules should be posted:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupsendrules|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupsendrules|"))
 def send_rules_to_group_cb(c):
     if not is_admin(c.from_user.id): return
     try:
@@ -4585,7 +4530,7 @@ def send_clear_messages_group_picker(admin_id):
     raw_bot.send_message(admin_id, "Select a group. The bot can delete only messages it has tracked since this feature was enabled:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupcleartracked|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupcleartracked|"))
 def clear_tracked_group_messages_cb(c):
     if not is_admin(c.from_user.id): return
     gid = int(c.data.split("|", 1)[1])
@@ -4602,7 +4547,7 @@ def clear_tracked_group_messages_cb(c):
     admin_success(c.from_user.id, f"Deleted {deleted} tracked messages. Failed: {failed}")
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupmgrremove|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupmgrremove|"))
 def remove_managed_group_callback(c):
     if not is_admin(c.from_user.id):
         return
@@ -4672,13 +4617,13 @@ def pending_methods_keyboard(page=0, page_size=10):
     return kb, len(rows)
 
 
-@bot.message_handler(func=lambda m: m.text == "⏳ Pending Methods" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "⏳ Pending Methods" and is_admin(m.from_user.id))
 def pending_methods_menu(m):
     kb, count = pending_methods_keyboard()
     raw_bot.send_message(m.from_user.id, f"⏳ PENDING METHODS\n\nWaiting for review: {count}\n\nSelect a method:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pendingpage|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pendingpage|"))
 def pending_page_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4688,7 +4633,7 @@ def pending_page_cb(c):
     bot.answer_callback_query(c.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pendingview|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pendingview|"))
 def pending_view_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4718,7 +4663,7 @@ def pending_view_cb(c):
         bot.answer_callback_query(c.id, str(exc)[:180], True)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pendingapprove|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pendingapprove|"))
 def pending_approve_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4778,7 +4723,7 @@ def pending_price_step(m):
         raw_bot.send_message(
             m.from_user.id,
             f"✅ Process Complete\n\n{row.get('name')} has been {action}.\n💰 Price: {price} points\n📌 It appears below pinned methods and above older unpinned methods.",
-            reply_markup=admin_menu(m.from_user.id),
+            reply_markup=admin_menu(),
         )
         try:
             if get_config().get("group_import_notify_enabled", True):
@@ -4790,7 +4735,7 @@ def pending_price_step(m):
         admin_error(m.from_user.id, exc)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pendingreject|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pendingreject|"))
 def pending_reject_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4804,7 +4749,7 @@ def pending_reject_cb(c):
         if not row:
             raise ValueError("Method was already processed")
         bot.answer_callback_query(c.id, "Rejected")
-        raw_bot.send_message(c.from_user.id, f"✅ Process Complete\nRejected: {row.get('name')}", reply_markup=admin_menu(c.from_user.id))
+        raw_bot.send_message(c.from_user.id, f"✅ Process Complete\nRejected: {row.get('name')}", reply_markup=admin_menu())
         try:
             if get_config().get("group_import_notify_enabled", True):
                 raw_bot.send_message(row.get("source_chat"), f"❌ {row.get('name')} was rejected by admin and was not published.")
@@ -4831,7 +4776,7 @@ def pin_methods_keyboard(action, page=0, page_size=12):
     return kb, len(rows)
 
 
-@bot.message_handler(func=lambda m: m.text == "📌 Pin Methods" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📌 Pin Methods" and is_admin(m.from_user.id))
 def pin_methods_menu(m):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.row(InlineKeyboardButton("📂 Pin FREE", callback_data="pinv2cat|free|pin"), InlineKeyboardButton("💎 Pin VIP", callback_data="pinv2cat|vip|pin"))
@@ -4839,7 +4784,7 @@ def pin_methods_menu(m):
     raw_bot.send_message(m.from_user.id, "📌 METHOD PLACEMENT\n\nFREE and VIP pins are managed separately. You can pin multiple methods in each category.", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodpinmenu|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodpinmenu|"))
 def method_pin_menu_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4849,7 +4794,7 @@ def method_pin_menu_cb(c):
     bot.answer_callback_query(c.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodpinpage|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodpinpage|"))
 def method_pin_page_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4859,7 +4804,7 @@ def method_pin_page_cb(c):
     bot.answer_callback_query(c.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("methodpinset|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("methodpinset|"))
 def method_pin_set_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -4871,7 +4816,7 @@ def method_pin_set_cb(c):
         if not row:
             raise ValueError("Method not found")
         bot.answer_callback_query(c.id, "Pinned" if value else "Unpinned", True)
-        raw_bot.send_message(c.from_user.id, f"✅ Process Complete\n{'📌 Pinned' if value else '📍 Unpinned'}: {row.get('name')}", reply_markup=admin_menu(c.from_user.id))
+        raw_bot.send_message(c.from_user.id, f"✅ Process Complete\n{'📌 Pinned' if value else '📍 Unpinned'}: {row.get('name')}", reply_markup=admin_menu())
     except Exception as exc:
         admin_error(c.from_user.id, exc)
 
@@ -4922,7 +4867,7 @@ threading.Thread(target=scheduler_loop,name='zedox-scheduler',daemon=True).start
 
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("buyid|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("buyid|"))
 def buy_method_by_id(c):
     from bson import ObjectId
     try:
@@ -4953,7 +4898,7 @@ def buy_method_by_id(c):
 # =========================
 # ✅ STABILITY FIXES: SAFE METHOD OPEN, BUTTON VISIBILITY, PINS, NOTIFICATIONS
 # =========================
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("openid|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("openid|"))
 def open_folder_by_id(c):
     if force_block(c.from_user.id):
         return
@@ -4977,7 +4922,7 @@ def open_folder_by_id(c):
         bot.answer_callback_query(c.id, "Unable to open method", True)
         log_event("open_method_error", c.from_user.id, details={"error": str(exc)}, level="error")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("openbyname|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("openbyname|"))
 def open_folder_by_name(c):
     try:
         _, cat, name = c.data.split("|", 2)
@@ -5015,7 +4960,7 @@ def _visibility_keyboard(mode, page=0, page_size=12):
     kb.row(InlineKeyboardButton("🔄 Refresh", callback_data=f"vis2page|{mode}|{page}"))
     return kb, len(items)
 
-@bot.message_handler(func=lambda m: m.text in ("🙈 Hide Button", "👁 Show Button") and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text in ("🙈 Hide Button", "👁 Show Button") and is_admin(m.from_user.id))
 def visibility_menu(m):
     mode = "hide" if m.text.startswith("🙈") else "show"
     kb, count = _visibility_keyboard(mode)
@@ -5023,7 +4968,7 @@ def visibility_menu(m):
     note = "Choose a visible button to hide." if mode == "hide" else "Choose a hidden button to restore."
     raw_bot.send_message(m.from_user.id, f"{title}\n━━━━━━━━━━━━━━━━━━━━\n{note}\n\nAvailable: {count}", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("vis2page|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("vis2page|"))
 def visibility_page_callback(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5035,7 +4980,7 @@ def visibility_page_callback(c):
     except Exception as exc:
         admin_error(c.from_user.id, exc)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("vis2|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("vis2|"))
 def visibility_callback_v2(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5064,7 +5009,7 @@ def visibility_callback_v2(c):
             bot.edit_message_reply_markup(c.from_user.id, c.message.message_id, reply_markup=kb)
         except Exception:
             pass
-        raw_bot.send_message(c.from_user.id, f"✅ Button {'hidden' if mode == 'hide' else 'shown'}: {text}\n\nUsers receive the updated menu on their next bot action or /start.", reply_markup=admin_menu(c.from_user.id))
+        raw_bot.send_message(c.from_user.id, f"✅ Button {'hidden' if mode == 'hide' else 'shown'}: {text}\n\nUsers receive the updated menu on their next bot action or /start.", reply_markup=admin_menu())
     except Exception as exc:
         admin_error(c.from_user.id, exc)
 
@@ -5082,7 +5027,7 @@ def pin_methods_keyboard_v2(cat, action, page=0, page_size=12):
     return kb, len(rows)
 
 # Replace the old Pin Methods experience with category-specific controls.
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pinv2cat|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pinv2cat|"))
 def pin_v2_category(c):
     if not is_admin(c.from_user.id): return
     _, cat, action = c.data.split("|")
@@ -5090,14 +5035,14 @@ def pin_v2_category(c):
     raw_bot.send_message(c.from_user.id, f"{'FREE' if cat == 'free' else 'VIP'} methods — select one to {'pin' if action == 'pin' else 'unpin'} ({count} available):", reply_markup=kb)
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pinv2page|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pinv2page|"))
 def pin_v2_page(c):
     _, cat, action, page = c.data.split("|")
     kb, _ = pin_methods_keyboard_v2(cat, action, int(page))
     bot.edit_message_reply_markup(c.from_user.id, c.message.message_id, reply_markup=kb)
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("pinv2set|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pinv2set|"))
 def pin_v2_set(c):
     if not is_admin(c.from_user.id): return
     try:
@@ -5125,11 +5070,11 @@ def _send_notify_settings(uid):
     target = cfg.get("method_notify_group") or cfg.get("join_notify_group") or "Not set"
     raw_bot.send_message(uid, f"🔔 NOTIFICATION SETTINGS\n\nMethod upload/update alerts can be switched on or off.\nTarget group: {target}", reply_markup=_notify_settings_keyboard())
 
-@bot.message_handler(func=lambda m: m.text == "🔔 Notify" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "🔔 Notify" and is_admin(m.from_user.id))
 def notify_settings_v2(m):
     _send_notify_settings(m.from_user.id)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("notifyv2|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("notifyv2|"))
 def notify_v2_callback(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5195,7 +5140,7 @@ def send_restricted_users_picker(admin_id):
     raw_bot.send_message(admin_id, "🔓 SELECT A USER\n\nChoose a person to unmute or unban:", reply_markup=kb)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("restoremember|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("restoremember|"))
 def restore_group_member_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -5386,7 +5331,7 @@ def save_scam_report_details(m):
         raw_bot.send_message(m.chat.id, f"❌ Could not submit the report: {str(exc)[:700]}")
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("scamapprove|") or c.data.startswith("scamreject|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("scamapprove|") or c.data.startswith("scamreject|"))
 def scam_report_review_cb(c):
     if not is_admin(c.from_user.id):
         return
@@ -5707,12 +5652,12 @@ def _group_messenger_menu_kb():
     return kb
 
 
-@bot.message_handler(func=lambda m: m.text == "📨 Group Messenger" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📨 Group Messenger" and is_admin(m.from_user.id))
 def group_messenger_menu(m):
     raw_bot.send_message(m.from_user.id, _group_auto_status_text(), reply_markup=_group_messenger_menu_kb())
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupmsgmenu|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupmsgmenu|"))
 def group_messenger_menu_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5775,7 +5720,7 @@ def save_group_auto_message(m):
     if not is_admin(m.from_user.id):
         return
     if (m.text or "").strip().lower() == "/cancel":
-        return raw_bot.send_message(m.from_user.id, "❌ Auto-message setup cancelled.", reply_markup=admin_menu(m.from_user.id))
+        return raw_bot.send_message(m.from_user.id, "❌ Auto-message setup cancelled.", reply_markup=admin_menu())
     _save_group_auto(source_chat=m.chat.id, source_message=m.message_id, active=False)
     raw_bot.send_message(m.from_user.id, "✅ PROCESS COMPLETE\n\nThe automatic group message has been saved. Select groups and interval, then turn it ON.", reply_markup=_group_messenger_menu_kb())
 
@@ -5813,7 +5758,7 @@ def save_group_auto_interval(m):
         raw_bot.send_message(m.from_user.id, f"❌ PROCESS FAILED\n\n{exc}", reply_markup=_group_messenger_menu_kb())
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupautotarget|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupautotarget|"))
 def group_auto_target_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5844,7 +5789,7 @@ def _send_group_auto_message(cfg):
     return sent, failed
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("groupmsg|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("groupmsg|"))
 def group_messenger_target_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5874,7 +5819,7 @@ def deliver_group_message(m):
     if not targets:
         return raw_bot.send_message(m.from_user.id, "❌ Session expired. Open Group Messenger again.")
     if (m.text or "").strip().lower() == "/cancel":
-        return raw_bot.send_message(m.from_user.id, "❌ Group message cancelled.", reply_markup=admin_menu(m.from_user.id))
+        return raw_bot.send_message(m.from_user.id, "❌ Group message cancelled.", reply_markup=admin_menu())
     sent = 0
     failed = []
     for gid in targets:
@@ -5887,9 +5832,9 @@ def deliver_group_message(m):
         text = f"✅ PROCESS COMPLETE\n\nMessage delivered to {sent}/{len(targets)} group{'s' if len(targets) != 1 else ''}."
         if failed:
             text += "\n\n⚠️ Failed:\n" + "\n".join(failed[:10])
-        raw_bot.send_message(m.from_user.id, text, reply_markup=admin_menu(m.from_user.id))
+        raw_bot.send_message(m.from_user.id, text, reply_markup=admin_menu())
     else:
-        raw_bot.send_message(m.from_user.id, "❌ PROCESS FAILED\n\nCould not deliver the message.\n" + "\n".join(failed[:10]), reply_markup=admin_menu(m.from_user.id))
+        raw_bot.send_message(m.from_user.id, "❌ PROCESS FAILED\n\nCould not deliver the message.\n" + "\n".join(failed[:10]), reply_markup=admin_menu())
 
 
 _channel_message_targets = {}
@@ -5906,7 +5851,7 @@ def _approved_channel_picker(admin_id):
     raw_bot.send_message(admin_id, "📨 CHANNEL MESSENGER\n\nChoose one approved channel or send to all approved channels:", reply_markup=kb)
 
 
-@bot.message_handler(func=lambda m: m.text == "📣 Channel Approvals" and admin_can_text(m.from_user.id, m.text))
+@bot.message_handler(func=lambda m: m.text == "📣 Channel Approvals" and is_admin(m.from_user.id))
 def channel_approvals_menu(m):
     pending = list(promoted_channels_col.find({"status": "pending"}).sort("submitted_at", 1).limit(50))
     kb = InlineKeyboardMarkup(row_width=1)
@@ -5916,7 +5861,7 @@ def channel_approvals_menu(m):
     kb.add(InlineKeyboardButton("📨 Channel Messenger", callback_data="chanmessenger"))
     raw_bot.send_message(m.from_user.id, f"📣 CHANNEL APPROVALS\n\nPending: {len(pending)}", reply_markup=kb)
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("chanreview|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chanreview|"))
 def channel_review_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5943,7 +5888,7 @@ def channel_review_cb(c):
     bot.answer_callback_query(c.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "chanmessenger"))
+@bot.callback_query_handler(func=lambda c: c.data == "chanmessenger")
 def channel_messenger_open_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5951,7 +5896,7 @@ def channel_messenger_open_cb(c):
     _approved_channel_picker(c.from_user.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("chanmsg|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chanmsg|"))
 def channel_message_target_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -5987,7 +5932,7 @@ def receive_channel_message_content(m):
     if (m.text or "").strip().lower() == "/cancel":
         _channel_message_targets.pop(m.from_user.id, None)
         _channel_message_drafts.pop(m.from_user.id, None)
-        return raw_bot.send_message(m.from_user.id, "❌ Channel message cancelled.", reply_markup=admin_menu(m.from_user.id))
+        return raw_bot.send_message(m.from_user.id, "❌ Channel message cancelled.", reply_markup=admin_menu())
     _channel_message_drafts[m.from_user.id] = {
         "source_chat": m.chat.id,
         "source_message": m.message_id,
@@ -6034,7 +5979,7 @@ def receive_channel_message_buttons(m):
     if not targets or not draft:
         return raw_bot.send_message(uid, "❌ Session expired. Open Channel Messenger again.")
     if (m.text or "").strip().lower() == "/cancel":
-        return raw_bot.send_message(uid, "❌ Channel message cancelled.", reply_markup=admin_menu(m.from_user.id))
+        return raw_bot.send_message(uid, "❌ Channel message cancelled.", reply_markup=admin_menu())
     kb, error = _parse_channel_buttons(m.text)
     if error:
         # restore session and ask again
@@ -6059,10 +6004,10 @@ def receive_channel_message_buttons(m):
     text = f"✅ PROCESS COMPLETE\n\nMessage delivered to {sent}/{len(targets)} channel{'s' if len(targets) != 1 else ''}."
     if failed:
         text += "\n\n⚠️ Failed:\n" + "\n".join(failed[:10])
-    raw_bot.send_message(uid, text, reply_markup=admin_menu(m.from_user.id))
+    raw_bot.send_message(uid, text, reply_markup=admin_menu())
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("chandeleteask|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chandeleteask|"))
 def channel_delete_ask_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -6076,7 +6021,7 @@ def channel_delete_ask_cb(c):
     bot.answer_callback_query(c.id)
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith("chandelete|")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("chandelete|"))
 def channel_delete_confirm_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -6124,7 +6069,7 @@ def send_approved_channel_promo(channel_doc):
     return message
 
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data.startswith(("chanapprove|", "chanreject|", "chanremove|"))))
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("chanapprove|", "chanreject|", "chanremove|")))
 def channel_decision_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
@@ -6173,7 +6118,7 @@ def channel_decision_cb(c):
         raw_bot.send_message(c.from_user.id, admin_text)
     bot.answer_callback_query(c.id, "Process complete")
 
-@bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "chanapprovedlist"))
+@bot.callback_query_handler(func=lambda c: c.data == "chanapprovedlist")
 def approved_channels_admin_cb(c):
     if not is_admin(c.from_user.id):
         return bot.answer_callback_query(c.id, "Admins only", True)
