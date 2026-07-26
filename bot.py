@@ -3078,27 +3078,27 @@ def settings_cmd(m):
 @bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_vip_msg"))
 def set_vip_msg_cb(c):
     msg = bot.send_message(c.from_user.id, "Send new VIP message:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: update_config("vip_msg", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_kb()))
+    bot.register_next_step_handler(msg, lambda x: set_config("vip_msg", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu(x.from_user.id)))
     bot.answer_callback_query(c.id)
 
 @bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_welcome"))
 def set_welcome_cb(c):
     msg = bot.send_message(c.from_user.id, "Send new welcome message:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: update_config("welcome", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_kb()))
+    bot.register_next_step_handler(msg, lambda x: set_config("welcome", x.text) or bot.send_message(x.from_user.id, "✅ Updated!", reply_markup=admin_menu(x.from_user.id)))
     bot.answer_callback_query(c.id)
 
 @bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_reward"))
 def set_reward_cb(c):
     current = get_config().get("ref_reward", 5)
     msg = bot.send_message(c.from_user.id, f"Current: {current}\nSend new amount:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: update_config("ref_reward", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points!", reply_markup=admin_kb()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("ref_reward", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} points!", reply_markup=admin_menu(x.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
 @bot.callback_query_handler(func=lambda c: callback_access_allowed(c) and (c.data == "set_ppd"))
 def set_ppd_cb(c):
     current = get_config().get("points_per_dollar", 100)
     msg = bot.send_message(c.from_user.id, f"Current: {current} pts = $1\nSend new value:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda x: update_config("points_per_dollar", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} pts = $1!", reply_markup=admin_kb()) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
+    bot.register_next_step_handler(msg, lambda x: set_config("points_per_dollar", int(x.text)) or bot.send_message(x.from_user.id, f"✅ Set to {x.text} pts = $1!", reply_markup=admin_menu(x.from_user.id)) if x.text.isdigit() else bot.send_message(x.from_user.id, "❌ Invalid!"))
     bot.answer_callback_query(c.id)
 
 # =========================
